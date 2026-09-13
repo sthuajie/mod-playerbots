@@ -1202,7 +1202,10 @@ bool KologarnMarkDpsTargetAction::Execute(Event /*event*/)
 
     if (!targetToMark)
     {
-        Unit* rightArm = AI_VALUE2(Unit*, "find target", "right arm");
+        // Resolve the arm by NPC entry: as a vehicle accessory it is not guaranteed to
+        // be present in this bot's threat-based target list, which made the Skull mark
+        // fall through to Kologarn's body.
+        Creature* rightArm = bot->FindNearestCreature(NPC_RIGHT_ARM, 100.0f);
         if (rightArm && rightArm->IsAlive())
         {
             targetToMark = rightArm;
@@ -1220,7 +1223,7 @@ bool KologarnMarkDpsTargetAction::Execute(Event /*event*/)
     if (!targetToMark)
         return false;  // No target to mark
 
-    Unit* leftArm = AI_VALUE2(Unit*, "find target", "left arm");
+    Creature* leftArm = bot->FindNearestCreature(NPC_LEFT_ARM, 100.0f);
     if (leftArm && leftArm->IsAlive())
         targetToCcMark = leftArm;
 

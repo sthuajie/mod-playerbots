@@ -33,6 +33,11 @@ enum UlduarIDs
     SPELL_RUNE_OF_POWER = 64320,
 
     // Kologarn
+    // The arms are installed as vehicle accessories by boss_kologarn.cpp
+    // (InstallAccessory), so they are resolved by NPC entry rather than through the
+    // threat-based "find target" lookup. Entries cross-checked against
+    // src/server/scripts/Northrend/Ulduar/Ulduar/boss_kologarn.cpp:89-90.
+    NPC_LEFT_ARM = 32933,
     NPC_RIGHT_ARM = 32934,
     NPC_RUBBLE = 33768,
     SPELL_CRUNCH_ARMOR = 64002,

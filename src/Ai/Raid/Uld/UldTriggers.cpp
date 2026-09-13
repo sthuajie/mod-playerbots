@@ -366,8 +366,11 @@ bool KologarnMarkDpsTargetTrigger::IsActive()
         return false;  // Skull marker is already set on right arm
     }
 
-    // Check that there is right arm to mark
-    Unit* rightArm = AI_VALUE2(Unit*, "find target", "right arm");
+    // Check that there is right arm to mark.
+    // The arm is a vehicle accessory installed by boss_kologarn.cpp, so it is not
+    // guaranteed to appear in this bot's threat-based target list. Resolve it by NPC
+    // entry instead; 100 yd comfortably covers the Kologarn encounter space.
+    Creature* rightArm = bot->FindNearestCreature(NPC_RIGHT_ARM, 100.0f);
     if (rightArm && rightArm->IsAlive())
     {
         return true;  // Found a right arm to mark

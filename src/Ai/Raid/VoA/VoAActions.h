@@ -48,4 +48,24 @@ public:
     bool isUseful() override;
 };
 
+//
+//  Toravon the Ice Watcher
+//
+
+class ToravonFrostbiteTauntAction : public Action
+{
+public:
+    ToravonFrostbiteTauntAction(PlayerbotAI* botAI) : Action(botAI, "toravon frostbite taunt action") {}
+    bool Execute(Event event) override;
+    bool isUseful() override;
+};
+
+class ToravonAttackFrozenOrbAction : public Action
+{
+public:
+    ToravonAttackFrozenOrbAction(PlayerbotAI* botAI) : Action(botAI, "toravon attack frozen orb action") {}
+    bool Execute(Event event) override;
+    bool isUseful() override;
+};
+
 #endif

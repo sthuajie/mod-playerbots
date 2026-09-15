@@ -8,6 +8,7 @@
 #include "Action.h"
 #include "Strategy.h"
 #include "Trigger.h"
+#include "VoAMultipliers.h"
 #include "vector"
 
 void RaidVoAStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
@@ -42,4 +43,24 @@ void RaidVoAStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
     triggers.push_back(new TriggerNode(
         "koralon fire resistance trigger",
         { NextAction("koralon fire resistance action", ACTION_RAID) }));
+
+    //
+    // Toravon the Ice Watcher
+    //
+    // Tank swap: the off-tank takes over once the tank actually holding Toravon reaches
+    // TORAVON_FROSTBITE_SWAP_STACKS. The trigger itself is inactive unless Toravon is
+    // present, alive and in combat, so this adds nothing to Emalon/Koralon pulls.
+    triggers.push_back(new TriggerNode(
+        "toravon frostbite swap trigger",
+        { NextAction("toravon frostbite taunt action", ACTION_RAID + 1) }));
+
+    // Frozen Orb priority for ranged DPS only.
+    triggers.push_back(new TriggerNode(
+        "toravon frozen orb trigger",
+        { NextAction("toravon attack frozen orb action", ACTION_RAID) }));
+}
+
+void RaidVoAStrategy::InitMultipliers(std::vector<Multiplier*>& multipliers)
+{
+    multipliers.push_back(new VoAToravonMultiplier(botAI));
 }

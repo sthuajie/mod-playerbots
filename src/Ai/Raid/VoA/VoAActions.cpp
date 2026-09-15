@@ -5,6 +5,7 @@
  */
 
 #include "VoAActions.h"
+#include "Creature.h"
 #include "Define.h"
 #include "Event.h"
 #include "Group.h"
@@ -190,4 +191,92 @@ bool EmalonFallFromFloorAction::isUseful()
 {
     EmalonFallFromFloorTrigger emalonFallFromFloorTrigger(botAI);
     return emalonFallFromFloorTrigger.IsActive();
+}
+
+//
+// Toravon the Ice Watcher
+//
+
+namespace
+{
+// Minimal VoA-local class taunt.
+//
+// Mirrors the class selection of IccCastClassTaunt (src/Ai/Raid/ICC/ICCShared.cpp:49)
+// but deliberately pulls in neither IcecrownHelpers nor any ICC instance state, and casts
+// by spell id instead of by name: the Spell.dbc shipped with this build has its name
+// fields zeroed, so PlayerbotAI's name-based cast path is not dependable here.
+bool ToravonCastClassTaunt(Player* bot, PlayerbotAI* botAI, Unit* target)
+{
+    if (!bot || !botAI || !target || !target->IsAlive())
+        return false;
+
+    uint32 tauntSpell = 0;
+    switch (bot->getClass())
+    {
+        case CLASS_WARRIOR:
+            tauntSpell = SPELL_TAUNT_WARRIOR;
+            break;
+        case CLASS_PALADIN:
+            tauntSpell = SPELL_TAUNT_PALADIN;
+            break;
+        case CLASS_DEATH_KNIGHT:
+            tauntSpell = SPELL_TAUNT_DEATH_KNIGHT;
+            break;
+        case CLASS_DRUID:
+            tauntSpell = SPELL_TAUNT_DRUID;
+            break;
+        default:
+            return false;
+    }
+
+    // The spell's own cooldown is the throttle: a bot cannot taunt more often than the
+    // taunt allows, so a swap that has already landed is not re-issued every tick.
+    if (!bot->HasSpell(tauntSpell) || bot->HasSpellCooldown(tauntSpell))
+        return false;
+
+    return botAI->CastSpell(tauntSpell, target);
+}
+}  // namespace
+
+bool ToravonFrostbiteTauntAction::Execute(Event /*event*/)
+{
+    Creature* toravon = bot->FindNearestCreature(BOSS_TORAVON, 60.0f);
+    if (!toravon || !toravon->IsAlive())
+        return false;
+
+    return ToravonCastClassTaunt(bot, botAI, toravon);
+}
+
+bool ToravonFrostbiteTauntAction::isUseful()
+{
+    ToravonFrostbiteSwapTrigger trigger(botAI);
+    return trigger.IsActive();
+}
+
+bool ToravonAttackFrozenOrbAction::Execute(Event /*event*/)
+{
+    Creature* orb = bot->FindNearestCreature(NPC_FROZEN_ORB, 60.0f);
+    if (!orb || !orb->IsAlive() || orb->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE))
+        return false;
+
+    if (bot->GetVictim() == orb)
+        return false;
+
+    // Re-target onto the nearest living orb. Stateless by design: no GUID is cached, so
+    // each ranged DPS resolves its own orb (25-man spawns three) and a dead orb simply
+    // stops resolving, letting the generic Toravon DPS target resume.
+    //
+    // The melee flag mirrors AttackAction's own rule
+    // (AttackAction.cpp:141: IsWithinMeleeRange(target) || IsMelee(bot)) so ranged DPS
+    // shoot the orb from range instead of being forced into melee attack state.
+    bool const shouldMelee = bot->IsWithinMeleeRange(orb) || botAI->IsMelee(bot);
+    bot->SetSelection(orb->GetGUID());
+    bot->Attack(orb, shouldMelee);
+    return true;
+}
+
+bool ToravonAttackFrozenOrbAction::isUseful()
+{
+    ToravonFrozenOrbTrigger trigger(botAI);
+    return trigger.IsActive();
 }

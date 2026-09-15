@@ -255,24 +255,20 @@ bool ToravonFrostbiteTauntAction::isUseful()
 
 bool ToravonAttackFrozenOrbAction::Execute(Event /*event*/)
 {
+    // Resolved by NPC entry rather than through the threat-based "find target" value: a
+    // special summon is not guaranteed to be in this bot's target list, the same reason
+    // the Kologarn fix resolves the arms by entry.
     Creature* orb = bot->FindNearestCreature(NPC_FROZEN_ORB, 60.0f);
     if (!orb || !orb->IsAlive() || orb->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE))
         return false;
 
-    if (bot->GetVictim() == orb)
+    if (AI_VALUE(Unit*, "current target") == orb)
         return false;
 
-    // Re-target onto the nearest living orb. Stateless by design: no GUID is cached, so
-    // each ranged DPS resolves its own orb (25-man spawns three) and a dead orb simply
-    // stops resolving, letting the generic Toravon DPS target resume.
-    //
-    // The melee flag mirrors AttackAction's own rule
-    // (AttackAction.cpp:141: IsWithinMeleeRange(target) || IsMelee(bot)) so ranged DPS
-    // shoot the orb from range instead of being forced into melee attack state.
-    bool const shouldMelee = bot->IsWithinMeleeRange(orb) || botAI->IsMelee(bot);
-    bot->SetSelection(orb->GetGUID());
-    bot->Attack(orb, shouldMelee);
-    return true;
+    // AttackAction::Attack() owns selection, current/old target, the melee-vs-ranged
+    // attack mode and the combat engine transition - the same contract UK's
+    // AttackFrostTombAction relies on (UKActions.cpp:28-32).
+    return Attack(orb);
 }
 
 bool ToravonAttackFrozenOrbAction::isUseful()

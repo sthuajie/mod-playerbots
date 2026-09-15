@@ -196,9 +196,9 @@ bool ToravonFrostbiteSwapTrigger::IsActive()
 
 bool ToravonFrozenOrbTrigger::IsActive()
 {
-    // Ranged DPS only: the active tank keeps Toravon, healers keep healing and melee
-    // keeps the boss in this first version.
-    if (!GET_PLAYERBOT_AI(bot) || botAI->IsTank(bot) || botAI->IsHeal(bot) || !botAI->IsRanged(bot))
+    // All non-tank, non-healer DPS assist on the orb: the active tank keeps Toravon and
+    // healers keep healing, while both melee and ranged DPS switch to the Frozen Orb.
+    if (!GET_PLAYERBOT_AI(bot) || botAI->IsTank(bot) || botAI->IsHeal(bot))
         return false;
 
     Creature* toravon = bot->FindNearestCreature(BOSS_TORAVON, TORAVON_RANGE);
@@ -209,5 +209,10 @@ bool ToravonFrozenOrbTrigger::IsActive()
     if (!orb || !orb->IsAlive() || orb->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE))
         return false;
 
+    // 25-man spawns three orbs per wave. Every DPS bot resolves its own nearest living
+    // orb independently, so several bots may focus the same one - that focus-fire
+    // behaviour is intentional for this version. No orb GUID is cached anywhere, so once
+    // the focused orb dies the next evaluation resolves another living orb, and when none
+    // remain the generic Toravon DPS target resumes by itself.
     return true;
 }

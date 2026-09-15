@@ -54,7 +54,7 @@ void RaidVoAStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
         "toravon frostbite swap trigger",
         { NextAction("toravon frostbite taunt action", ACTION_RAID + 1) }));
 
-    // Frozen Orb priority for ranged DPS only.
+    // Frozen Orb priority for all DPS (tanks and healers excluded).
     triggers.push_back(new TriggerNode(
         "toravon frozen orb trigger",
         { NextAction("toravon attack frozen orb action", ACTION_RAID) }));

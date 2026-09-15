@@ -8,6 +8,7 @@
 #define PLAYERBOTS_VOAACTIONS_H
 
 #include "Action.h"
+#include "AttackAction.h"
 #include "Event.h"
 #include "MovementActions.h"
 #include "PlayerbotAI.h"
@@ -60,10 +61,10 @@ public:
     bool isUseful() override;
 };
 
-class ToravonAttackFrozenOrbAction : public Action
+class ToravonAttackFrozenOrbAction : public AttackAction
 {
 public:
-    ToravonAttackFrozenOrbAction(PlayerbotAI* botAI) : Action(botAI, "toravon attack frozen orb action") {}
+    ToravonAttackFrozenOrbAction(PlayerbotAI* botAI) : AttackAction(botAI, "toravon attack frozen orb action") {}
     bool Execute(Event event) override;
     bool isUseful() override;
 };

@@ -35,11 +35,13 @@ enum VoAIDs
     // repeatedly. Resolved by id, never by name: the Spell.dbc shipped with this build
     // has every name/description offset zeroed.
     SPELL_TORAVON_FROSTBITE = 72004,
-    // Taunt spells by class (all four verified present in the current Spell.dbc).
-    SPELL_TAUNT_WARRIOR = 355,
-    SPELL_TAUNT_PALADIN = 62124,
-    SPELL_TAUNT_DEATH_KNIGHT = 56222,
-    SPELL_TAUNT_DRUID = 6795,
+    // Taunt spell ids for the tank swap are deliberately NOT declared here. VoAIDs is an
+    // unscoped enum and BuildSharedTriggerContexts.cpp pulls this header into the same
+    // translation unit as ICCTriggers.h, which already declares SPELL_TAUNT_WARRIOR,
+    // SPELL_TAUNT_PALADIN, SPELL_TAUNT_DK and SPELL_TAUNT_DRUID for these same ids, so
+    // declaring them here made that unit fail to compile with a C2365 redefinition. They
+    // are file-local constants in VoAActions.cpp instead, which is where their only user
+    // lives - the same way RSTriggers.h prefixes its copies with RS_.
     // Frostbite stacks at which the off-tank takes over. The mechanic is a 4-5 stack
     // swap; 4 is used as the conservative bot threshold.
     TORAVON_FROSTBITE_SWAP_STACKS = 4,

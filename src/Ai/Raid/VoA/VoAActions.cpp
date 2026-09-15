@@ -199,6 +199,17 @@ bool EmalonFallFromFloorAction::isUseful()
 
 namespace
 {
+// Taunt spells by class, kept file-local on purpose. These ids are also declared in
+// ICCTriggers.h (SPELL_TAUNT_WARRIOR / _PALADIN / _DK / _DRUID) for the same spells, and
+// both headers reach one translation unit through BuildSharedTriggerContexts.cpp, so
+// declaring them in VoATriggers.h as well made that unit fail to compile with a C2365
+// redefinition. Nothing outside this file needs them. RSTriggers.h resolves the same
+// collision by prefixing its copies with RS_.
+constexpr uint32 TORAVON_TAUNT_WARRIOR = 355;    // Taunt
+constexpr uint32 TORAVON_TAUNT_PALADIN = 62124;  // Hand of Reckoning
+constexpr uint32 TORAVON_TAUNT_DK = 56222;       // Dark Command
+constexpr uint32 TORAVON_TAUNT_DRUID = 6795;     // Growl
+
 // Minimal VoA-local class taunt.
 //
 // Mirrors the class selection of IccCastClassTaunt (src/Ai/Raid/ICC/ICCShared.cpp:49)
@@ -214,16 +225,16 @@ bool ToravonCastClassTaunt(Player* bot, PlayerbotAI* botAI, Unit* target)
     switch (bot->getClass())
     {
         case CLASS_WARRIOR:
-            tauntSpell = SPELL_TAUNT_WARRIOR;
+            tauntSpell = TORAVON_TAUNT_WARRIOR;
             break;
         case CLASS_PALADIN:
-            tauntSpell = SPELL_TAUNT_PALADIN;
+            tauntSpell = TORAVON_TAUNT_PALADIN;
             break;
         case CLASS_DEATH_KNIGHT:
-            tauntSpell = SPELL_TAUNT_DEATH_KNIGHT;
+            tauntSpell = TORAVON_TAUNT_DK;
             break;
         case CLASS_DRUID:
-            tauntSpell = SPELL_TAUNT_DRUID;
+            tauntSpell = TORAVON_TAUNT_DRUID;
             break;
         default:
             return false;

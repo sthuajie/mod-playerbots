@@ -1210,7 +1210,7 @@ bool MimironPhase1PositioningTrigger::IsActive()
 
 bool MimironP3Wx2LaserBarrageTrigger::IsActive()
 {
-    Unit* boss = AI_VALUE2(Unit*, "find target", "vx-001");
+    Creature* boss = bot->FindNearestCreature(NPC_VX001, 100.0f);
 
     // Check boss and it is alive
     if (!boss || !boss->IsAlive())

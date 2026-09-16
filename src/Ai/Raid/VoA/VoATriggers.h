@@ -95,4 +95,11 @@ public:
     bool IsActive() override;
 };
 
+class ToravonMarkSkullTrigger : public Trigger
+{
+public:
+    ToravonMarkSkullTrigger(PlayerbotAI* ai) : Trigger(ai, "toravon mark skull trigger") {}
+    bool IsActive() override;
+};
+
 #endif

@@ -69,4 +69,12 @@ public:
     bool isUseful() override;
 };
 
+class ToravonMarkSkullAction : public Action
+{
+public:
+    ToravonMarkSkullAction(PlayerbotAI* botAI) : Action(botAI, "toravon mark skull action") {}
+    bool Execute(Event event) override;
+    bool isUseful() override;
+};
+
 #endif

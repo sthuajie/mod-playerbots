@@ -24,6 +24,7 @@ public:
         creators["koralon fire resistance trigger"] = &RaidVoATriggerContext::koralon_fire_resistance_trigger;
         creators["toravon frostbite swap trigger"] = &RaidVoATriggerContext::toravon_frostbite_swap_trigger;
         creators["toravon frozen orb trigger"] = &RaidVoATriggerContext::toravon_frozen_orb_trigger;
+        creators["toravon mark skull trigger"] = &RaidVoATriggerContext::toravon_mark_skull_trigger;
     }
 
 private:
@@ -35,6 +36,7 @@ private:
     static Trigger* koralon_fire_resistance_trigger(PlayerbotAI* ai) { return new BossFireResistanceTrigger(ai, "koralon the flame watcher"); }
     static Trigger* toravon_frostbite_swap_trigger(PlayerbotAI* ai) { return new ToravonFrostbiteSwapTrigger(ai); }
     static Trigger* toravon_frozen_orb_trigger(PlayerbotAI* ai) { return new ToravonFrozenOrbTrigger(ai); }
+    static Trigger* toravon_mark_skull_trigger(PlayerbotAI* ai) { return new ToravonMarkSkullTrigger(ai); }
 };
 
 #endif

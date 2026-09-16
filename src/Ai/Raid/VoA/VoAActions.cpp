@@ -12,6 +12,7 @@
 #include "ObjectGuid.h"
 #include "Player.h"
 #include "Playerbots.h"
+#include "RtiTargetValue.h"
 #include "Unit.h"
 #include "VoATriggers.h"
 
@@ -249,13 +250,68 @@ bool ToravonCastClassTaunt(Player* bot, PlayerbotAI* botAI, Unit* target)
 }
 }  // namespace
 
+// Valid living Frozen Orb currently holding the group's Skull icon, or nullptr.
+// Every check the encounter needs lives here: resolvable, alive, right entry, selectable
+// and inside the Toravon arena (which also implies the same map and instance).
+Unit* ToravonSkullOrb(PlayerbotAI* botAI, Player* bot)
+{
+    Group* group = bot->GetGroup();
+    if (!group)
+        return nullptr;
+
+    ObjectGuid const skull = group->GetTargetIcon(RtiTargetValue::skullIndex);
+    if (skull.IsEmpty())
+        return nullptr;
+
+    Unit* unit = botAI->GetUnit(skull);
+    if (!unit || !unit->IsAlive() || unit->GetEntry() != NPC_FROZEN_ORB)
+        return nullptr;
+    if (unit->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE))
+        return nullptr;
+    if (bot->GetExactDist(unit) > 60.0f)
+        return nullptr;
+
+    return unit;
+}
+
+// Nearest living, selectable Frozen Orb this bot could legitimately attack.
+Creature* ToravonFindLivingOrb(Player* bot)
+{
+    Creature* orb = bot->FindNearestCreature(NPC_FROZEN_ORB, 60.0f);
+    if (!orb || !orb->IsAlive() || orb->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE))
+        return nullptr;
+
+    return orb;
+}
+
 bool ToravonFrostbiteTauntAction::Execute(Event /*event*/)
 {
     Creature* toravon = bot->FindNearestCreature(BOSS_TORAVON, 60.0f);
     if (!toravon || !toravon->IsAlive())
         return false;
 
-    return ToravonCastClassTaunt(bot, botAI, toravon);
+    // Capture the current holder before taunting so the handoff can be completed after.
+    Unit* oldVictim = toravon->GetVictim();
+
+    if (!ToravonCastClassTaunt(bot, botAI, toravon))
+        return false;
+
+    // Only a real change of hands counts as a handoff.
+    if (toravon->GetVictim() != bot || oldVictim == bot)
+        return false;
+
+    // Finish the handoff for a bot off-tank: stop it attacking so it neither rebuilds
+    // threat on Toravon nor keeps swinging at it. A human player is never touched, so a
+    // human old tank is left exactly as it was.
+    if (oldVictim && oldVictim != bot && oldVictim->IsAlive())
+    {
+        Player* oldPlayer = oldVictim->ToPlayer();
+        PlayerbotAI* oldAi = oldPlayer ? GET_PLAYERBOT_AI(oldPlayer) : nullptr;
+        if (oldPlayer && oldAi && oldAi->IsTank(oldPlayer))
+            oldPlayer->AttackStop();
+    }
+
+    return true;
 }
 
 bool ToravonFrostbiteTauntAction::isUseful()
@@ -266,24 +322,82 @@ bool ToravonFrostbiteTauntAction::isUseful()
 
 bool ToravonAttackFrozenOrbAction::Execute(Event /*event*/)
 {
-    // Resolved by NPC entry rather than through the threat-based "find target" value: a
-    // special summon is not guaranteed to be in this bot's target list, the same reason
-    // the Kologarn fix resolves the arms by entry.
-    Creature* orb = bot->FindNearestCreature(NPC_FROZEN_ORB, 60.0f);
-    if (!orb || !orb->IsAlive() || orb->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE))
-        return false;
+    // Skull is the group focus token: a live Skull orb is authoritative and no other orb
+    // is considered while it stands.
+    Unit* focus = ToravonSkullOrb(botAI, bot);
 
-    if (AI_VALUE(Unit*, "current target") == orb)
+    if (!focus)
+    {
+        // Skull is empty, dead, or points at something that is not a living orb: claim the
+        // nearest valid orb for the group. Only the first writer matters - every later bot
+        // sees a valid Skull and simply follows it, so focus stays on one orb.
+        Creature* orb = ToravonFindLivingOrb(bot);
+        if (!orb)
+            return false;
+
+        if (Group* group = bot->GetGroup())
+            group->SetTargetIcon(RtiTargetValue::skullIndex, bot->GetGUID(), orb->GetGUID());
+
+        focus = orb;
+    }
+
+    // Melee DPS has to actually close on the focused orb, otherwise a target change alone
+    // leaves it standing where it was. Ranged DPS is deliberately not dragged into melee.
+    if (botAI->IsMelee(bot) && !bot->IsWithinMeleeRange(focus))
+        return ReachCombatTo(focus, sPlayerbotAIConfig.meleeDistance);
+
+    if (AI_VALUE(Unit*, "current target") == focus)
         return false;
 
     // AttackAction::Attack() owns selection, current/old target, the melee-vs-ranged
     // attack mode and the combat engine transition - the same contract UK's
     // AttackFrostTombAction relies on (UKActions.cpp:28-32).
-    return Attack(orb);
+    return Attack(focus);
 }
 
 bool ToravonAttackFrozenOrbAction::isUseful()
 {
     ToravonFrozenOrbTrigger trigger(botAI);
+    return trigger.IsActive();
+}
+
+// Advances or releases the group's Skull token: moves it to the next living orb, or back
+// to Toravon once no orb is left. Driven by a tank bot on purpose - when the last orb dies
+// the DPS orb trigger is already false, so this is the only path that still runs and can
+// clear a stale Skull. Mirrors Emalon's existing marking pattern.
+bool ToravonMarkSkullAction::Execute(Event /*event*/)
+{
+    Group* group = bot->GetGroup();
+    if (!group)
+        return false;
+
+    ObjectGuid const skull = group->GetTargetIcon(RtiTargetValue::skullIndex);
+
+    if (Creature* orb = ToravonFindLivingOrb(bot))
+    {
+        if (ToravonSkullOrb(botAI, bot))
+            return false;  // already focused on a living orb
+
+        group->SetTargetIcon(RtiTargetValue::skullIndex, bot->GetGUID(), orb->GetGUID());
+        return true;
+    }
+
+    // No living orb left. Release Skull only when it still points at an orb - dead or a
+    // stale GUID - so a Skull that is already on something else is left alone.
+    Unit* skullUnit = skull.IsEmpty() ? nullptr : botAI->GetUnit(skull);
+    if (skull.IsEmpty() || (skullUnit && skullUnit->GetEntry() != NPC_FROZEN_ORB))
+        return false;
+
+    Creature* toravon = bot->FindNearestCreature(BOSS_TORAVON, 60.0f);
+    if (!toravon || !toravon->IsAlive())
+        return false;
+
+    group->SetTargetIcon(RtiTargetValue::skullIndex, bot->GetGUID(), toravon->GetGUID());
+    return true;
+}
+
+bool ToravonMarkSkullAction::isUseful()
+{
+    ToravonMarkSkullTrigger trigger(botAI);
     return trigger.IsActive();
 }

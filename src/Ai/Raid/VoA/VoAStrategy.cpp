@@ -54,10 +54,18 @@ void RaidVoAStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
         "toravon frostbite swap trigger",
         { NextAction("toravon frostbite taunt action", ACTION_RAID + 1) }));
 
-    // Frozen Orb priority for all DPS (tanks and healers excluded).
+    // Frozen Orb priority for all DPS (tanks and healers excluded). Skull is the group
+    // focus token, so the whole raid concentrates on one orb at a time.
     triggers.push_back(new TriggerNode(
         "toravon frozen orb trigger",
         { NextAction("toravon attack frozen orb action", ACTION_RAID) }));
+
+    // Advances Skull to the next living orb, and hands Skull back to Toravon once none is
+    // left. Tank-driven so it still runs after the last orb dies and the DPS orb trigger
+    // above has already gone false - mirrors Emalon's marking pattern.
+    triggers.push_back(new TriggerNode(
+        "toravon mark skull trigger",
+        { NextAction("toravon mark skull action", ACTION_RAID) }));
 }
 
 void RaidVoAStrategy::InitMultipliers(std::vector<Multiplier*>& multipliers)

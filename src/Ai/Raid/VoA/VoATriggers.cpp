@@ -10,6 +10,7 @@
 #include "Object.h"
 #include "PlayerbotAI.h"
 #include "Playerbots.h"
+#include "RtiTargetValue.h"
 #include "SpellAuras.h"
 
 bool EmalonMarkBossTrigger::IsActive()
@@ -209,10 +210,46 @@ bool ToravonFrozenOrbTrigger::IsActive()
     if (!orb || !orb->IsAlive() || orb->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE))
         return false;
 
-    // 25-man spawns three orbs per wave. Every DPS bot resolves its own nearest living
-    // orb independently, so several bots may focus the same one - that focus-fire
-    // behaviour is intentional for this version. No orb GUID is cached anywhere, so once
-    // the focused orb dies the next evaluation resolves another living orb, and when none
-    // remain the generic Toravon DPS target resumes by itself.
+    // 25-man spawns three orbs per wave. Every DPS bot resolves the group's Skull orb,
+    // which is claimed by the first bot that finds Skull unusable, so the whole raid
+    // focuses one orb at a time instead of splitting across three. The advance to the
+    // next orb and the release back to Toravon are driven by ToravonMarkSkullTrigger,
+    // which keeps running after the last orb dies and this trigger is already false.
     return true;
+}
+
+bool ToravonMarkSkullTrigger::IsActive()
+{
+    // Driven by a bot tank on purpose: right role, always present during the encounter,
+    // and unaffected by the DPS-only gate on the orb trigger above.
+    if (!GET_PLAYERBOT_AI(bot) || !botAI->IsTank(bot))
+        return false;
+
+    Creature* toravon = bot->FindNearestCreature(BOSS_TORAVON, TORAVON_RANGE);
+    if (!toravon || !toravon->IsAlive() || !toravon->IsInCombat())
+        return false;
+
+    Group* group = bot->GetGroup();
+    if (!group)
+        return false;
+
+    Creature* orb = bot->FindNearestCreature(NPC_FROZEN_ORB, TORAVON_RANGE);
+    bool const orbAlive = orb && orb->IsAlive() && !orb->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE);
+
+    ObjectGuid const skull = group->GetTargetIcon(RtiTargetValue::skullIndex);
+    Unit* skullUnit = skull.IsEmpty() ? nullptr : botAI->GetUnit(skull);
+    bool const skullIsLivingOrb =
+        skullUnit && skullUnit->IsAlive() && skullUnit->GetEntry() == NPC_FROZEN_ORB;
+
+    // An orb is up but Skull is not on a living orb: focus, or advance to the next orb.
+    if (orbAlive && !skullIsLivingOrb)
+        return true;
+
+    // No orb left and Skull still points at an orb - dead, or a GUID that no longer
+    // resolves: hand Skull back to Toravon. A Skull that is already on anything else is
+    // left untouched.
+    if (!orbAlive && !skull.IsEmpty() && (!skullUnit || skullUnit->GetEntry() == NPC_FROZEN_ORB))
+        return true;
+
+    return false;
 }

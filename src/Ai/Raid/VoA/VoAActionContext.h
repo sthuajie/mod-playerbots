@@ -26,6 +26,7 @@ public:
         creators["koralon fire resistance action"] = &RaidVoAActionContext::koralon_fire_resistance_action;
         creators["toravon frostbite taunt action"] = &RaidVoAActionContext::toravon_frostbite_taunt_action;
         creators["toravon attack frozen orb action"] = &RaidVoAActionContext::toravon_attack_frozen_orb_action;
+        creators["toravon mark skull action"] = &RaidVoAActionContext::toravon_mark_skull_action;
     }
 
 private:
@@ -37,6 +38,7 @@ private:
     static Action* koralon_fire_resistance_action(PlayerbotAI* ai) { return new BossFireResistanceAction(ai, "koralon the flame watcher"); }
     static Action* toravon_frostbite_taunt_action(PlayerbotAI* ai) { return new ToravonFrostbiteTauntAction(ai); }
     static Action* toravon_attack_frozen_orb_action(PlayerbotAI* ai) { return new ToravonAttackFrozenOrbAction(ai); }
+    static Action* toravon_mark_skull_action(PlayerbotAI* ai) { return new ToravonMarkSkullAction(ai); }
 };
 
 #endif

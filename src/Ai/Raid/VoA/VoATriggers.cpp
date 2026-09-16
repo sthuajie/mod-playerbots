@@ -225,19 +225,41 @@ bool ToravonMarkSkullTrigger::IsActive()
     if (!GET_PLAYERBOT_AI(bot) || !botAI->IsTank(bot))
         return false;
 
-    Creature* toravon = bot->FindNearestCreature(BOSS_TORAVON, TORAVON_RANGE);
-    if (!toravon || !toravon->IsAlive() || !toravon->IsInCombat())
-        return false;
-
     Group* group = bot->GetGroup();
     if (!group)
+        return false;
+
+    ObjectGuid const skull = group->GetTargetIcon(RtiTargetValue::skullIndex);
+    if (skull.IsEmpty())
+        return false;
+
+    // Release path. A kill, a wipe and leaving the instance all end with the group still
+    // holding the Skull this encounter put up, and every other Toravon gate is false by
+    // then, so nothing would ever take it down. Runs only while this bot is out of combat,
+    // and only while no Toravon is still being fought - an off-tank that has not engaged
+    // yet must not release the focus token of a running encounter. The icon is released
+    // only when it is recognisably ours: Toravon, a Frozen Orb (alive or dead), or a GUID
+    // that no longer resolves because the unit despawned. A Skull on anything else belongs
+    // to somebody else and is left alone, and an already empty Skull returned above, so
+    // this cannot rewrite the same value every tick.
+    if (!bot->IsInCombat())
+    {
+        Creature* running = bot->FindNearestCreature(BOSS_TORAVON, TORAVON_RANGE);
+        if (running && running->IsAlive() && running->IsInCombat())
+            return false;
+
+        Unit* staleUnit = botAI->GetUnit(skull);
+        return !staleUnit || staleUnit->GetEntry() == BOSS_TORAVON || staleUnit->GetEntry() == NPC_FROZEN_ORB;
+    }
+
+    Creature* toravon = bot->FindNearestCreature(BOSS_TORAVON, TORAVON_RANGE);
+    if (!toravon || !toravon->IsAlive() || !toravon->IsInCombat())
         return false;
 
     Creature* orb = bot->FindNearestCreature(NPC_FROZEN_ORB, TORAVON_RANGE);
     bool const orbAlive = orb && orb->IsAlive() && !orb->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE);
 
-    ObjectGuid const skull = group->GetTargetIcon(RtiTargetValue::skullIndex);
-    Unit* skullUnit = skull.IsEmpty() ? nullptr : botAI->GetUnit(skull);
+    Unit* skullUnit = botAI->GetUnit(skull);
     bool const skullIsLivingOrb =
         skullUnit && skullUnit->IsAlive() && skullUnit->GetEntry() == NPC_FROZEN_ORB;
 
@@ -248,7 +270,7 @@ bool ToravonMarkSkullTrigger::IsActive()
     // No orb left and Skull still points at an orb - dead, or a GUID that no longer
     // resolves: hand Skull back to Toravon. A Skull that is already on anything else is
     // left untouched.
-    if (!orbAlive && !skull.IsEmpty() && (!skullUnit || skullUnit->GetEntry() == NPC_FROZEN_ORB))
+    if (!orbAlive && (!skullUnit || skullUnit->GetEntry() == NPC_FROZEN_ORB))
         return true;
 
     return false;

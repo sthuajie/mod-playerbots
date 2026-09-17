@@ -167,6 +167,24 @@ static int ToravonFrostbiteStacks(Unit* unit)
     return aura ? static_cast<int>(aura->GetStackAmount()) : 0;
 }
 
+// Toravon as something the encounter can still be marked on: himself while alive, or his
+// corpse while it is still present. nullptr once he is gone entirely.
+//
+// FindNearestCreature() defaults to alive-only (Object.h:646) and its checker compares
+// IsAlive() == alive exactly (GridNotifiers.h:1360-1368), so the corpse needs the second call
+// with alive = false. This is what keeps the Skull state machine running through boss death so
+// the icon can be finalised onto Toravon instead of being stranded on a dead orb.
+//
+// File-local (static) on purpose: VoAActions.cpp has its own copy, and a shared non-static
+// definition in both translation units would be a duplicate symbol at link time.
+static Creature* ToravonResolve(Player* bot)
+{
+    if (Creature* alive = bot->FindNearestCreature(BOSS_TORAVON, TORAVON_RANGE))
+        return alive;
+
+    return bot->FindNearestCreature(BOSS_TORAVON, TORAVON_RANGE, false);
+}
+
 // The single bot tank that should take Toravon over right now, or nullptr.
 //
 // Before this, every eligible off-tank could taunt on the same tick. That happens to be safe
@@ -307,32 +325,38 @@ bool ToravonMarkSkullTrigger::IsActive()
     if (!group)
         return false;
 
-    // Toravon alive and in the arena is the anchor. Nothing here depends on being in combat,
-    // so the token can be established before the pull and survives the encounter ending.
-    // While he is dead this returns false and nothing runs, which deliberately leaves the last
-    // marker where it was instead of clearing it.
-    Creature* toravon = bot->FindNearestCreature(BOSS_TORAVON, TORAVON_RANGE);
-    if (!toravon || !toravon->IsAlive())
+    // Toravon alive, or his corpse while it remains, is the anchor. Nothing here depends on
+    // being in combat, so the token can be established before the pull and is still serviced
+    // after the boss dies. Only when he is no longer resolvable at all does this go quiet - and
+    // even then the last marker is left alone rather than cleared.
+    Creature* toravon = ToravonResolve(bot);
+    if (!toravon)
         return false;
 
     ObjectGuid const skull = group->GetTargetIcon(RtiTargetValue::skullIndex);
     Unit* skullUnit = skull.IsEmpty() ? nullptr : botAI->GetUnit(skull);
 
-    Creature* orb = bot->FindNearestCreature(NPC_FROZEN_ORB, TORAVON_RANGE);
-    bool const orbAlive = orb && orb->IsAlive() && !orb->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE);
-
-    if (orbAlive)
+    if (toravon->IsAlive())
     {
-        // An orb is up: Skull belongs on the focused living orb. Needs work when it is empty,
-        // dead, stale, or pointing anywhere that is not a living orb - which is both the
-        // initial claim and the advance to the next orb once the focused one dies.
-        bool const skullIsLivingOrb =
-            skullUnit && skullUnit->IsAlive() && skullUnit->GetEntry() == NPC_FROZEN_ORB;
-        return !skullIsLivingOrb;
+        Creature* orb = bot->FindNearestCreature(NPC_FROZEN_ORB, TORAVON_RANGE);
+        bool const orbAlive = orb && orb->IsAlive() && !orb->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE);
+
+        if (orbAlive)
+        {
+            // An orb is up: Skull belongs on the focused living orb. Needs work when it is
+            // empty, dead, stale, or pointing anywhere that is not a living orb - which is both
+            // the initial claim and the advance to the next orb once the focused one dies.
+            bool const skullIsLivingOrb =
+                skullUnit && skullUnit->IsAlive() && skullUnit->GetEntry() == NPC_FROZEN_ORB;
+            return !skullIsLivingOrb;
+        }
     }
 
-    // No living orb: Skull belongs on Toravon - before the pull (Skull may be empty or on
-    // something unrelated), between orb waves and after the last orb dies. Already being on
-    // Toravon needs no rewrite, which is what stops this writing the same GUID every tick.
+    // No living orb - or the boss is already dead, in which case any surviving orb no longer
+    // matters: Skull belongs on Toravon. This is what establishes the token before the pull
+    // (Skull may be empty or on something unrelated), what brings it back after the last orb
+    // dies, and what finalises it onto Toravon if he died while Skull was still on an orb.
+    // Already being on Toravon needs no rewrite, which is what stops this writing the same
+    // GUID every tick.
     return skullUnit != toravon;
 }

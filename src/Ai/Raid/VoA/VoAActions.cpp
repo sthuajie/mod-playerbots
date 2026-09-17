@@ -247,21 +247,23 @@ bool ToravonCastClassTaunt(Player* bot, PlayerbotAI* botAI, Unit* target)
     if (!bot->HasSpell(tauntSpell) || bot->HasSpellCooldown(tauntSpell))
         return false;
 
-    // Raid handoff, matching what IccCastClassTaunt does when the raid cheat is enabled
-    // (src/Ai/Raid/ICC/ICCShared.cpp:60-67): drive this tank to the top of the threat list and
-    // fixate it, so the boss reselects it deterministically instead of relying on a normal
-    // taunt to win the 110%/130% victim comparison of ThreatManager::ReselectVictim().
+    // Deliberately a plain class taunt, with no threat injection and no fixate.
     //
-    // Kept as a VoA-local equivalent on purpose - no IcecrownHelpers, no ICC instance state.
-    // AiPlayerbot.BotCheats ships as "food,taxi,raid" (conf/playerbots.conf.dist), so this is
-    // the normal path here; HasCheat keeps it correct if the cheat is ever turned off.
-    if (botAI->HasCheat(BotCheatMask::raid))
-    {
-        ThreatManager& mgr = target->GetThreatMgr();
-        mgr.AddThreat(bot, 1000000.0f, nullptr, true, true);
-        mgr.FixateTarget(bot);
-    }
-
+    // IccCastClassTaunt additionally does AddThreat(bot, 1000000.0f, ...) + FixateTarget(bot)
+    // when the raid cheat is on (src/Ai/Raid/ICC/ICCShared.cpp:60-67), but that contract does
+    // not transfer to a repeating tank swap: ThreatManager::FixateTarget() sets a _fixateRef
+    // that nothing releases except FixateTarget(nullptr) or the fixated unit leaving the
+    // threat list (ThreatManager.cpp:606, 919-920) - it is not tied to the taunt aura, and
+    // TauntUpdate()/UpdateVictim() never touch it. ReselectVictim() returns the fixated target
+    // first (ThreatManager.cpp:641-642), so the first replacement would be pinned for good and
+    // the SECOND swap could never happen.
+    //
+    // A normal taunt is enough on its own: the taunt aura runs TauntUpdate() -> UpdateVictim()
+    // (SpellAuraEffects.cpp:3588, ThreatManager.cpp:550), the heap puts the taunting reference
+    // on top (CompareThreatLessThan -> CompareReferencesLT, ThreatManager.h:326-329), and
+    // taunt state outranks numeric threat there (ThreatManager.cpp:703-704 with
+    // TAUNT_STATE_DETAUNT=0 < NONE=1 < TAUNT=2, ThreatManager.h:269), which bypasses the
+    // 110%/130% checks in ReselectVictim() entirely. So casting is all that is needed.
     return botAI->CastSpell(tauntSpell, target);
 }
 }  // namespace
@@ -298,6 +300,22 @@ Creature* ToravonFindLivingOrb(Player* bot)
         return nullptr;
 
     return orb;
+}
+
+// Toravon as something the encounter can still be marked on: himself while alive, or his
+// corpse while it is still present. nullptr once he is gone entirely.
+//
+// FindNearestCreature() defaults to alive-only (Object.h:646) and its checker compares
+// IsAlive() == alive exactly (GridNotifiers.h:1360-1368), so the corpse needs the second call
+// with alive = false. Group::SetTargetIcon() stores and broadcasts whatever GUID it is handed
+// and performs no liveness check at all (Group.cpp:1824-1843), so a dead boss can be marked -
+// which is what lets Skull be finalised onto Toravon after the kill.
+static Creature* ToravonResolve(Player* bot)
+{
+    if (Creature* alive = bot->FindNearestCreature(BOSS_TORAVON, 60.0f))
+        return alive;
+
+    return bot->FindNearestCreature(BOSS_TORAVON, 60.0f, false);
 }
 
 bool ToravonFrostbiteTauntAction::Execute(Event /*event*/)
@@ -387,11 +405,10 @@ bool ToravonAttackFrozenOrbAction::isUseful()
 }
 
 // Keeps the group's Skull token on the right Toravon target: the focused living orb while an
-// orb is up, and Toravon himself whenever no living orb exists.
+// orb is up, and Toravon himself - alive or dead - whenever no living orb should hold it.
 //
-// Deliberately never releases the icon to empty. The raid wants to see the boss marked before
-// the pull, between orb waves, after the last orb dies and after the encounter ends; clearing
-// it on encounter end (as an earlier revision did) removed a marker the players were using.
+// Deliberately never releases the icon to empty, and deliberately keeps working after the
+// boss dies: if he dies while the token sits on an orb, this finalises it back onto him.
 // Driven by a tank bot on purpose - when the last orb dies the DPS orb trigger is already
 // false, so this is the only path that still runs. Mirrors Emalon's existing marking pattern.
 bool ToravonMarkSkullAction::Execute(Event /*event*/)
@@ -400,25 +417,30 @@ bool ToravonMarkSkullAction::Execute(Event /*event*/)
     if (!group)
         return false;
 
-    // Toravon alive and in the arena is what makes this icon ours to set. When he is dead the
-    // trigger is inactive and nothing runs, which leaves the last marker in place on purpose.
-    Creature* toravon = bot->FindNearestCreature(BOSS_TORAVON, 60.0f);
-    if (!toravon || !toravon->IsAlive())
+    // Living Toravon, or his corpse while it is still there. Once he is gone entirely there is
+    // nothing to mark, and doing nothing leaves the last marker in place rather than clearing it.
+    Creature* toravon = ToravonResolve(bot);
+    if (!toravon)
         return false;
 
-    if (Creature* orb = ToravonFindLivingOrb(bot))
+    // A living boss with a living orb up: the token belongs on the focused orb.
+    if (toravon->IsAlive())
     {
-        if (ToravonSkullOrb(botAI, bot))
-            return false;  // already focused on a living orb
+        if (Creature* orb = ToravonFindLivingOrb(bot))
+        {
+            if (ToravonSkullOrb(botAI, bot))
+                return false;  // already focused on a living orb
 
-        group->SetTargetIcon(RtiTargetValue::skullIndex, bot->GetGUID(), orb->GetGUID());
-        return true;
+            group->SetTargetIcon(RtiTargetValue::skullIndex, bot->GetGUID(), orb->GetGUID());
+            return true;
+        }
     }
 
-    // No living orb: the token belongs on Toravon. This covers the pre-pull state (Skull may
-    // be empty or on something unrelated), the gap between orb waves, the moment the last orb
-    // dies and the out-of-combat state after the fight. Writing only when the icon is not
-    // already on Toravon is what keeps this from rewriting the same GUID every tick.
+    // Otherwise the token belongs on Toravon: before the pull (Skull may be empty or on
+    // something unrelated), between orb waves, after the last orb dies, and after the boss dies
+    // - including when he died with Skull still on an orb, which this pulls back onto him.
+    // Never ObjectGuid::Empty. Writing only when the icon is not already on Toravon is what
+    // keeps this from rewriting the same GUID every tick.
     ObjectGuid const skull = group->GetTargetIcon(RtiTargetValue::skullIndex);
     if (!skull.IsEmpty() && botAI->GetUnit(skull) == toravon)
         return false;

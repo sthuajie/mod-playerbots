@@ -8,10 +8,12 @@
 #include "Creature.h"
 #include "EventMap.h"
 #include "Object.h"
+#include "ObjectAccessor.h"
 #include "PlayerbotAI.h"
 #include "Playerbots.h"
 #include "RtiTargetValue.h"
 #include "SpellAuras.h"
+#include "ThreatManager.h"
 
 bool EmalonMarkBossTrigger::IsActive()
 {
@@ -165,6 +167,79 @@ static int ToravonFrostbiteStacks(Unit* unit)
     return aura ? static_cast<int>(aura->GetStackAmount()) : 0;
 }
 
+// The single bot tank that should take Toravon over right now, or nullptr.
+//
+// Before this, every eligible off-tank could taunt on the same tick. That happens to be safe
+// for a two-tank roster - the only off-tank is the one that is not the holder - but it is not
+// safe for three or more. This picks one replacement deterministically: the eligible bot tank
+// with the lowest assist-tank index, ties broken by GUID, so a larger tank line-up still
+// produces exactly one taunt per swap. No state is cached anywhere; the roster is re-read
+// every evaluation, so nothing can go stale.
+static Player* ToravonSelectNextTank(Player* bot, Creature* toravon)
+{
+    Group* group = bot->GetGroup();
+    if (!group)
+        return nullptr;
+
+    Unit* holder = toravon->GetThreatMgr().GetCurrentVictim();
+
+    Player* best = nullptr;
+    int32 bestIndex = 0;
+    ObjectGuid::LowType bestGuid = 0;
+    bool bestRanked = false;
+
+    Group::MemberSlotList const& slots = group->GetMemberSlots();
+    for (Group::member_citerator itr = slots.begin(); itr != slots.end(); ++itr)
+    {
+        Player* member = ObjectAccessor::FindPlayer(itr->guid);
+        // The holder is not a replacement. This bot itself MUST stay in the running: the
+        // caller asks whether it is the selected one, so excluding it here would make the
+        // trigger permanently false.
+        if (!member || !member->IsAlive() || member == holder)
+            continue;
+
+        PlayerbotAI* memberAi = GET_PLAYERBOT_AI(member);
+        if (!memberAi || !memberAi->IsTank(member))
+            continue;
+
+        // A tank that is still stacked too high must not take over.
+        if (ToravonFrostbiteStacks(member) >= TORAVON_FROSTBITE_SWAP_STACKS)
+            continue;
+
+        int32 index = 0;
+        bool ranked = false;
+        for (int32 i = 0; i < 3; ++i)
+        {
+            if (memberAi->IsAssistTankOfIndex(member, i))
+            {
+                index = i;
+                ranked = true;
+                break;
+            }
+        }
+
+        bool better = false;
+        if (!best)
+            better = true;
+        else if (ranked != bestRanked)
+            better = ranked;  // a ranked assist tank outranks an unranked one
+        else if (index != bestIndex)
+            better = index < bestIndex;
+        else
+            better = member->GetGUID().GetCounter() < bestGuid;
+
+        if (better)
+        {
+            best = member;
+            bestIndex = index;
+            bestRanked = ranked;
+            bestGuid = member->GetGUID().GetCounter();
+        }
+    }
+
+    return best;
+}
+
 bool ToravonFrostbiteSwapTrigger::IsActive()
 {
     // Bot tanks only. A real player tank is never driven by this trigger; a bot
@@ -176,9 +251,12 @@ bool ToravonFrostbiteSwapTrigger::IsActive()
     if (!toravon || !toravon->IsAlive() || !toravon->IsInCombat())
         return false;
 
-    // Tank swaps are driven from the off-tank side only, and the current holder is
-    // read from the boss itself rather than from a "main tank" label.
-    Unit* victim = toravon->GetVictim();
+    // Tank swaps are driven from the off-tank side only, and the current holder is read from
+    // the threat manager rather than from toravon->GetVictim(): Unit::GetVictim() returns
+    // m_attacking (Unit.h:904), which the creature AI only rewrites on its next tick, while a
+    // taunt resolves synchronously inside the threat manager. Reading the stale one kept this
+    // trigger firing for one extra tick after every successful swap.
+    Unit* victim = toravon->GetThreatMgr().GetCurrentVictim();
     if (!victim || victim == bot || !victim->IsAlive())
         return false;
 
@@ -190,9 +268,9 @@ bool ToravonFrostbiteSwapTrigger::IsActive()
     if (ToravonFrostbiteStacks(bot) >= TORAVON_FROSTBITE_SWAP_STACKS)
         return false;
 
-    // A single-tank raid never reaches this point: the only tank is the victim, so
-    // there is no taunt loop and no AttackStop behaviour in that case.
-    return true;
+    // Exactly one off-tank acts: this bot must be the selected replacement. A single-tank
+    // raid never gets here at all, because the only tank is the holder.
+    return bot == ToravonSelectNextTank(bot, toravon);
 }
 
 bool ToravonFrozenOrbTrigger::IsActive()
@@ -220,8 +298,8 @@ bool ToravonFrozenOrbTrigger::IsActive()
 
 bool ToravonMarkSkullTrigger::IsActive()
 {
-    // Driven by a bot tank on purpose: right role, always present during the encounter,
-    // and unaffected by the DPS-only gate on the orb trigger above.
+    // Driven by a bot tank on purpose: right role, always available around Toravon, and
+    // unaffected by the DPS-only gate on the orb trigger above.
     if (!GET_PLAYERBOT_AI(bot) || !botAI->IsTank(bot))
         return false;
 
@@ -229,49 +307,32 @@ bool ToravonMarkSkullTrigger::IsActive()
     if (!group)
         return false;
 
-    ObjectGuid const skull = group->GetTargetIcon(RtiTargetValue::skullIndex);
-    if (skull.IsEmpty())
-        return false;
-
-    // Release path. A kill, a wipe and leaving the instance all end with the group still
-    // holding the Skull this encounter put up, and every other Toravon gate is false by
-    // then, so nothing would ever take it down. Runs only while this bot is out of combat,
-    // and only while no Toravon is still being fought - an off-tank that has not engaged
-    // yet must not release the focus token of a running encounter. The icon is released
-    // only when it is recognisably ours: Toravon, a Frozen Orb (alive or dead), or a GUID
-    // that no longer resolves because the unit despawned. A Skull on anything else belongs
-    // to somebody else and is left alone, and an already empty Skull returned above, so
-    // this cannot rewrite the same value every tick.
-    if (!bot->IsInCombat())
-    {
-        Creature* running = bot->FindNearestCreature(BOSS_TORAVON, TORAVON_RANGE);
-        if (running && running->IsAlive() && running->IsInCombat())
-            return false;
-
-        Unit* staleUnit = botAI->GetUnit(skull);
-        return !staleUnit || staleUnit->GetEntry() == BOSS_TORAVON || staleUnit->GetEntry() == NPC_FROZEN_ORB;
-    }
-
+    // Toravon alive and in the arena is the anchor. Nothing here depends on being in combat,
+    // so the token can be established before the pull and survives the encounter ending.
+    // While he is dead this returns false and nothing runs, which deliberately leaves the last
+    // marker where it was instead of clearing it.
     Creature* toravon = bot->FindNearestCreature(BOSS_TORAVON, TORAVON_RANGE);
-    if (!toravon || !toravon->IsAlive() || !toravon->IsInCombat())
+    if (!toravon || !toravon->IsAlive())
         return false;
+
+    ObjectGuid const skull = group->GetTargetIcon(RtiTargetValue::skullIndex);
+    Unit* skullUnit = skull.IsEmpty() ? nullptr : botAI->GetUnit(skull);
 
     Creature* orb = bot->FindNearestCreature(NPC_FROZEN_ORB, TORAVON_RANGE);
     bool const orbAlive = orb && orb->IsAlive() && !orb->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE);
 
-    Unit* skullUnit = botAI->GetUnit(skull);
-    bool const skullIsLivingOrb =
-        skullUnit && skullUnit->IsAlive() && skullUnit->GetEntry() == NPC_FROZEN_ORB;
+    if (orbAlive)
+    {
+        // An orb is up: Skull belongs on the focused living orb. Needs work when it is empty,
+        // dead, stale, or pointing anywhere that is not a living orb - which is both the
+        // initial claim and the advance to the next orb once the focused one dies.
+        bool const skullIsLivingOrb =
+            skullUnit && skullUnit->IsAlive() && skullUnit->GetEntry() == NPC_FROZEN_ORB;
+        return !skullIsLivingOrb;
+    }
 
-    // An orb is up but Skull is not on a living orb: focus, or advance to the next orb.
-    if (orbAlive && !skullIsLivingOrb)
-        return true;
-
-    // No orb left and Skull still points at an orb - dead, or a GUID that no longer
-    // resolves: hand Skull back to Toravon. A Skull that is already on anything else is
-    // left untouched.
-    if (!orbAlive && (!skullUnit || skullUnit->GetEntry() == NPC_FROZEN_ORB))
-        return true;
-
-    return false;
+    // No living orb: Skull belongs on Toravon - before the pull (Skull may be empty or on
+    // something unrelated), between orb waves and after the last orb dies. Already being on
+    // Toravon needs no rewrite, which is what stops this writing the same GUID every tick.
+    return skullUnit != toravon;
 }

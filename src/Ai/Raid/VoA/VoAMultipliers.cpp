@@ -15,6 +15,7 @@
 #include "Playerbots.h"
 #include "RtiTargetValue.h"
 #include "SpellAuras.h"
+#include "ThreatManager.h"
 #include "VoATriggers.h"
 #include "WarriorActions.h"
 
@@ -75,8 +76,13 @@ float VoAToravonMultiplier::GetValue(Action* action)
     if (!aura || aura->GetStackAmount() < TORAVON_FROSTBITE_SWAP_STACKS)
         return 1.0f;
 
-    // The tank that is actually holding Toravon is never suppressed.
-    if (toravon->GetVictim() == bot)
+    // The tank that is actually holding Toravon is never suppressed. Read from the threat
+    // manager, not from toravon->GetVictim(): Unit::GetVictim() returns m_attacking
+    // (Unit.h:904), which the creature AI only rewrites on its next tick, so on the tick the
+    // handoff lands it would still name the tank that was just replaced - leaving exactly
+    // that tank unsuppressed at the one moment it must not be, which let it taunt straight
+    // back. The threat manager is updated synchronously by the taunt itself.
+    if (toravon->GetThreatMgr().GetCurrentVictim() == bot)
         return 1.0f;
 
     // --- Old-tank suppression after a successful handoff -------------------------------

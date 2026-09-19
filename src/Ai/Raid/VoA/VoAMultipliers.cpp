@@ -35,6 +35,10 @@ namespace
 //   CastDarkCommandAction    DK       Dark Command 56222   MOD_TAUNT, cat 82, 8 s
 //   CastGrowlAction          Druid    Growl 6795           MOD_TAUNT, cat 82, 8 s
 //   CastChallengingRoarAction Druid   Challenging Roar 5209 MOD_TAUNT, 180 s (AoE taunt)
+//   CastChallengingShoutAction Warrior Challenging Shout 1161 MOD_TAUNT, 180 s (AoE taunt).
+//                            EncounterHelpers::IsTauntAction already classes it as a Warrior
+//                            taunt (src/Util/EncounterHelpers.cpp:443-445); listed here too so
+//                            the off-tank gate stays semantically in step with that helper.
 //
 // Deliberately NOT listed, with the evidence:
 //   Death Grip 49576   no MOD_TAUNT in Spell.dbc, core only spell-fixes it
@@ -42,6 +46,9 @@ namespace
 //   Heroic Throw 57755 / Shield Slam 23922 / Icy Touch 45477
 //                      no MOD_TAUNT; the Warrior and DK action nodes fall back to these and
 //                      they are ordinary threat abilities, so they stay available.
+//   Mocking Blow 694   has MOD_TAUNT + ATTACK_ME, but TankWarriorStrategy schedules no
+//                      protection-rotation path for it (the node also demands a Battle Stance
+//                      prerequisite), so it is out of scope until such a path is shown.
 //
 // The scripted encounter action (ToravonFrostbiteTauntAction) is a different class and is never
 // matched here, so the swap the encounter asks for is always allowed through.
@@ -52,7 +59,39 @@ bool IsGenericBossTaunt(Action* action)
            dynamic_cast<CastRighteousDefenseAction*>(action) ||
            dynamic_cast<CastDarkCommandAction*>(action) ||
            dynamic_cast<CastGrowlAction*>(action) ||
-           dynamic_cast<CastChallengingRoarAction*>(action);
+           dynamic_cast<CastChallengingRoarAction*>(action) ||
+           dynamic_cast<CastChallengingShoutAction*>(action);
+}
+
+// Auxiliary Warrior taunts that hurt this encounter whoever is holding Toravon. These are gated
+// for the current holder as well, which is why they are separate from IsGenericBossTaunt():
+// the state gates below deliberately exempt the holder, and that exemption is what let a Warrior
+// who was tanking spend his only Taunt 355 on a Frozen Orb.
+//
+//   CastTauntOnSnareTargetAction   Warrior   Taunt 355
+//        SNARE_ACTION derives it from CastSnareSpellAction, NOT from CastTauntAction
+//        (WarriorActions.h:110), so neither the state gates nor IsGenericBossTaunt() can see it.
+//        TankWarriorStrategy wires "taunt on snare target" as the ALTERNATIVE of
+//        "heroic throw on snare target" (TankWarriorStrategy.cpp:37-44 and :225-231), and its
+//        target comes from the "snare target" value: SnareTargetValue::Calculate() returns any
+//        moving enemy whose chase target is not a tank (SnareTargetValue.cpp:44-53). A Frozen
+//        Orb resetting its threat onto a random player every 10 s qualifies exactly
+//        (boss_toravon.cpp:188-198), so the warrior can cast Taunt 355 - the same spell, the
+//        same 8 s category-82 cooldown the scripted swap depends on - onto an orb.
+//
+//   CastChallengingShoutAction     Warrior   Challenging Shout 1161
+//        MELEE_ACTION -> CastMeleeSpellAction, scheduled by "high aoe"
+//        (TankWarriorStrategy.cpp:250-256). Spell 1161 is SPELL_AURA_MOD_TAUNT on a 10-yard
+//        caster-centred AoE (Spell.dbc: target 22 SRC_CASTER, radius index 13 == 10.0 yd), so
+//        while the warrior tanks Toravon in melee the boss is inside the area: it retargets the
+//        boss onto this warrior and adds a DIMINISHING_TAUNT step on him.
+//
+// Both are blocked for holder and off-tank alike: the taunt resource they spend is needed by the
+// scripted handoff either way, and neither is part of a tank's ordinary rotation.
+bool IsToravonAuxiliaryTaunt(Action* action)
+{
+    return dynamic_cast<CastTauntOnSnareTargetAction*>(action) ||
+           dynamic_cast<CastChallengingShoutAction*>(action);
 }
 
 // Is this unit a tank? Bots are resolved by their tank strategy, real players by their talent
@@ -157,6 +196,14 @@ float VoAToravonMultiplier::GetValue(Action* action)
     // tank dies - a huntard with threat must not be able to lock the surviving tank out.
     if (!holder || !holder->IsAlive() || !holder->IsInWorld() || !IsTankHolder(holder))
         return 1.0f;
+
+    // Encounter-wide auxiliary-taunt gate. Deliberately placed AFTER STATE D and BEFORE the
+    // "holder == bot" exemption below: the two taunts it blocks burn the taunt resource the
+    // scripted handoff needs no matter which tank this bot currently is, so the current holder
+    // must not be exempt from it. Everything else a holder does - attacks, threat generation,
+    // defensives, movement - stays unrestricted.
+    if (IsToravonAuxiliaryTaunt(action))
+        return 0.0f;
 
     // The holder is never suppressed, whatever its Frostbite looks like.
     if (holder == bot)
